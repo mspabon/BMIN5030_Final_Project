@@ -1,0 +1,75 @@
+---
+title: "BMIN5030 Final Project: Influenza Vaccine Response"
+format: html
+editor: visual
+---
+
+## Overview
+
+Seasonal influenza vaccination produces variable antibody responses across individuals, and differences in age and baseline immune status may contribute to this variation. This project will use the FluPRINT dataset to identify demographic and immune measurements associated with antibody response and examine whether those associations differ between younger and older adults.
+
+## Introduction
+
+Antibody responses to seasonal influenza vaccination vary across individuals, which may affect the protection achieved after vaccination. Age is one potential contributor, but differences in immune cell populations, cytokines, and other baseline measurements may also be associated with response. FluPRINT combines demographic, immunological, and influenza-specific antibody data from multiple vaccination studies, allowing these relationships to be examined together.
+
+The question draws on immunology to interpret immune measurements and vaccine responses, and on biomedical informatics and statistics to organize and analyze data collected across studies. An initial focus will be identifying participants with comparable pre- and post-vaccination antibody measurements, then examining which baseline immune features are available across age groups. These checks will guide the choice of response measure and the subsequent analyses.
+
+## Methods/Results
+
+```{r}
+library(tidyverse)
+
+fluprint <- readr::read_csv("data/fluprint_export.csv",
+                            show_col_types = FALSE)
+
+dim(fluprint)
+names(fluprint)
+```
+
+The FluPRINT export contained 156,118 rows and 38 variables. Since the data include measurement and assay columns alongside donor IDs, the number of rows does not represent the number of individual participants; the next step is to examine how many donors have vaccine-response and age information.\
+\
+
+```{r}
+# count individual donors
+dplyr::n_distinct(fluprint$donor_id)
+
+# check how response and visit day are recorded
+dplyr::count(fluprint, vaccine_response)
+dplyr::count(fluprint, visit_day)
+```
+
+The 156,118 measurement rows came from 740 individual donors wherein most rows were recorded at visit day 0 and the vaccine-response field contained values of 0, 1, or NULL. Donors appear in multiple rows, indicating response counts must be calculated after reducing the data to one record per relevant donor or vaccination visit.
+
+```{r}
+# count unique donor visits
+fluprint_visits <- dplyr::distinct(
+  fluprint,
+  donor_id, visit_id, visit_age, vaccine_response
+)
+
+nrow(fluprint_visits)
+dplyr::count(fluprint_visits, vaccine_response)
+```
+
+After reducing the data to one record per donor in the current summary, 252 participants had a vaccine-response value of 0 and 111 had a value of 1. The remaining 377 had NULL recorded for vaccine response, so they cannot be included in an analysis comparing the two response groups.\
+
+```{r}
+# keep donors with a recorded response
+response_data <- dplyr::filter(
+  fluprint_visits,
+  vaccine_response %in% c("0", "1"),
+  !is.na(visit_age)
+)
+
+# compare ages across response groups
+ggplot(response_data, aes(x = vaccine_response, y = visit_age)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(
+    title = "Age by influenza vaccine response",
+    x = "Vaccine response",
+    y = "Age (years)"
+  ) +
+  theme_bw()
+```
+
+The age distributions for the two vaccine response groups overlap substantially, with similar median ages of about 22-23 years. The group labeled 1 has a slightly higher median age, but the plot alone does not show a clear difference in age between the groups.
