@@ -6,28 +6,24 @@ editor: visual
 
 ## Overview
 
-Seasonal influenza vaccination produces variable antibody responses across individuals, and differences in age and baseline immune status may contribute to this variation. This project will use the FluPRINT dataset to identify demographic and immune measurements associated with antibody response and examine whether those associations differ between younger and older adults.
+Influenza vaccine responses varies across individuals, but the factors associated with a strong antibody response are not fully understood. Using FluPRINT data, this project examines whether age and baseline IFN-γ and IL-10 measurements differ between low and high responders. Recorded influenza vaccination history is also preliminarily explored where available. Since participants also come from multiple studies with different levels of data coverage, the analysis considers study membership and interprets results in light of missing information.
 
 ## Introduction
 
-Antibody responses to seasonal influenza vaccination vary across individuals, which may affect the protection achieved after vaccination. Age is one potential contributor, but differences in immune cell populations, cytokines, and other baseline measurements may also be associated with response. FluPRINT combines demographic, immunological, and influenza-specific antibody data from multiple vaccination studies, allowing these relationships to be examined together.
+Antibody responses to seasonal influenza vaccination vary between individuals, and age and baseline immune activity may help explain some of that variation. This project utilizes the FluPRINT dataset to bring together participant information and immune measurements from multiple influenza vaccination studies and make it possible to examine these relationships across studies.
 
-The question draws on immunology to interpret immune measurements and vaccine responses, and on biomedical informatics and statistics to organize and analyze data collected across studies. An initial focus will be identifying participants with comparable pre- and post-vaccination antibody measurements, then examining which baseline immune features are available across age groups. These checks will guide the choice of response measure and the subsequent analyses.
+FluPRINT defines vaccine response using hemagglutination inhibition (HAI) antibody titers; participants were classified as high responders (1) when their postvaccination titers reached at least 40 for every vaccine strain and their geometric mean titer increased at least fourfold. Participants with a recorded response who did not meet both criteria were classified as low responders (0).
 
-## Methods/Results
+Using this definition, this project examines whether age and two baseline immune markers, IFN-γ and IL-10, are associated with response group. It also explores how recorded influenza vaccination history relates to response.
+
+## Methods
 
 ```{r}
 library(tidyverse)
 
 fluprint <- readr::read_csv("data/fluprint_export.csv",
                             show_col_types = FALSE)
-
-dim(fluprint)
-names(fluprint)
 ```
-
-The FluPRINT export contained 156,118 rows and 38 variables. Since the data include measurement and assay columns alongside donor IDs, the number of rows does not represent the number of individual participants; the next step is to examine how many donors have vaccine-response and age information.\
-\
 
 ```{r}
 # count individual donors
@@ -38,20 +34,24 @@ dplyr::count(fluprint, vaccine_response)
 dplyr::count(fluprint, visit_day)
 ```
 
-The 156,118 measurement rows came from 740 individual donors wherein most rows were recorded at visit day 0 and the vaccine-response field contained values of 0, 1, or NULL. Donors appear in multiple rows, indicating response counts must be calculated after reducing the data to one record per relevant donor or vaccination visit.
-
 ```{r}
 # count unique donor visits
-fluprint_visits <- dplyr::distinct(
-  fluprint,
-  donor_id, visit_id, visit_age, vaccine_response
-)
+fluprint_visits <- fluprint |>
+  distinct(donor_id, visit_id, study_id, visit_age, vaccine_response)
 
 nrow(fluprint_visits)
-dplyr::count(fluprint_visits, vaccine_response)
+count(fluprint_visits, vaccine_response)
 ```
 
-After reducing the data to one record per donor in the current summary, 252 participants had a vaccine-response value of 0 and 111 had a value of 1. The remaining 377 had NULL recorded for vaccine response, so they cannot be included in an analysis comparing the two response groups.\
+The FluPRINT export was loaded from the downloaded fluprint_export.csv. Because each participant can have many measurement rows, records were reduced to distinct combinations of donor ID, visit ID, study ID, age, and vaccine response before counting response groups. Only records with a response of 0 or 1 and a recorded age were used for response comparisons. "NULL" text values were treated as missing information.
+
+Age was summarized and plotted by response group. Baseline immune measurements were identified using visit_day == 0. IFN-γ (L50_IFNG) and IL-10 (L50_IL10) were selected for closer examination because both were measured for a substantial number of participants, and their normalized values were compared using boxplots and medians. Separate logistic regression models examined each marker’s association with high versus low response while accounting for age and study (focused on using studies 17, 18, and 21). A separate model examined age and response in the same three studies.
+
+An exploratory panel analysis applied the same model to 50 L50 markers measured once per participant in the same 233-person sample; FASL was excluded because 18 participants had duplicate baseline measurements, and p-values were adjusted across markers using the Benjamini-Hochberg method.
+
+Lastly, recorded influenza vaccination history was summarized separately. Responses coded "0" and "1" were retained for this exploratory comparison, while "NULL" was excluded. Since history was missing for many participants and its availability differed by study, vaccination-history results were reported descriptively.
+
+## Results
 
 ```{r}
 # keep donors with a recorded response
@@ -66,10 +66,364 @@ ggplot(response_data, aes(x = vaccine_response, y = visit_age)) +
   geom_boxplot(fill = "lightblue") +
   labs(
     title = "Age by influenza vaccine response",
-    x = "Vaccine response",
+    x = "Vaccine response (0 = low, 1 = high)",
     y = "Age (years)"
   ) +
   theme_bw()
 ```
 
-The age distributions for the two vaccine response groups overlap substantially, with similar median ages of about 22-23 years. The group labeled 1 has a slightly higher median age, but the plot alone does not show a clear difference in age between the groups.
+Among the 363 participants with a recorded vaccine response, 252 were low responders and 111 were high responders. Median ages were 22.11 and 22.98 years, respectively. The age distributions overlapped substantially, so the plot does not suggest a clear difference between response groups.
+
+```{r}
+# summarize participants with a recorded response
+response_data |>
+  group_by(vaccine_response) |>
+  summarise(
+    n = n(),
+    median_age = median(visit_age),
+    youngest = min(visit_age),
+    oldest = max(visit_age),
+    .groups = "drop"
+  )
+
+# check which studies contributed participants
+response_data |>
+  count(study_id, vaccine_response)
+
+```
+
+Response groups were unevenly distributed across studies. For example, study 21 included 33 low and 37 high responders, whereas study 18 included 80 low and 33 high responders. Because study membership was also related to the observed response distribution, the regression analyses can be understood to account for study.
+
+```{r}
+# count participants with each selected baseline marker
+fluprint |>
+  filter(
+    visit_day == 0,
+    donor_id %in% response_data$donor_id,
+    name_formatted %in% c("L50_IFNG", "L50_IL10")
+  ) |>
+  group_by(name_formatted, vaccine_response) |>
+  summarise(
+    participants = n_distinct(donor_id),
+    measurements = n(),
+    .groups = "drop"
+  )
+```
+
+```{r}
+# compare baseline immune markers by response
+marker_data <- fluprint |>
+  filter(
+    visit_day == 0,
+    name_formatted %in% c("L50_IFNG", "L50_IL10"),
+    donor_id %in% response_data$donor_id
+  ) |>
+  select(donor_id, study_id, vaccine_response,
+         name_formatted, units, data)
+
+marker_data |>
+  group_by(name_formatted, vaccine_response) |>
+  summarise(
+    n = n(),
+    median_value = median(data, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(marker_data,
+       aes(x = vaccine_response, y = data, fill = vaccine_response)) +
+  geom_boxplot() +
+  facet_wrap(~ name_formatted) +
+  labs(
+    title = "Baseline immune markers by influenza vaccine response",
+    x = "Vaccine response (0 = low, 1 = high)",
+    y = "Normalized measurement (Z.log2)"
+  ) +
+  theme_bw() +
+  guides(fill = "none")
+```
+
+Baseline IFN-γ measurements were slightly higher among high responders than low responders (median 0.295 versus 0.220 Z.log2). IL-10 medians were similar between groups (0.030 versus 0.050 Z.log2, respectively). Both plots showed substantial overlap, so neither marker clearly separated high and low responders on its own.
+
+```{r}
+# keep studies w both response groups
+analysis_data <- marker_data |>
+  filter(study_id %in% c(17, 18, 21)) |>
+  left_join(
+    response_data |> select(donor_id, visit_age),
+    by = "donor_id"
+  ) |>
+  mutate(response_binary = as.integer(vaccine_response))
+
+# model markers separately
+ifng_model <- glm(
+  response_binary ~ data + visit_age + factor(study_id),
+  data = analysis_data |> filter(name_formatted == "L50_IFNG"),
+  family = binomial
+)
+
+il10_model <- glm(
+  response_binary ~ data + visit_age + factor(study_id),
+  data = analysis_data |> filter(name_formatted == "L50_IL10"),
+  family = binomial
+)
+
+# report the marker association from each model
+data.frame(
+  marker = c("IFN-γ", "IL-10"),
+  participants = c(nobs(ifng_model), nobs(il10_model)),
+  odds_ratio = round(exp(c(coef(ifng_model)["data"],
+                           coef(il10_model)["data"])), 2),
+  p_value = signif(c(
+    coef(summary(ifng_model))["data", "Pr(>|z|)"],
+    coef(summary(il10_model))["data", "Pr(>|z|)"]
+  ), 3)
+)
+```
+
+Both marker models included 233 participants from studies 17, 18, and 21 and accounted for age and study. A one-unit increase in baseline IFN-γ was associated with an estimated odds ratio of 1.28 for high response, but the association was not statistically clear (p = 0.231). IL-10 showed little association with response (odds ratio = 0.98, p = 0.872). The overlapping marker distributions and model results do not provide strong evidence that either selected marker distinguishes high from low responders in this sample.
+
+```{r}
+# examine age and response within the same three studies
+age_data <- response_data |>
+  filter(study_id %in% c(17, 18, 21)) |>
+  mutate(response_binary = as.integer(vaccine_response))
+
+age_data |>
+  group_by(vaccine_response) |>
+  summarise(
+    n = n(),
+    median_age = median(visit_age),
+    .groups = "drop"
+  )
+
+age_model <- glm(
+  response_binary ~ visit_age + factor(study_id),
+  data = age_data,
+  family = binomial()
+)
+
+# report the age association after accounting for study
+data.frame(
+  participants = nobs(age_model),
+  age_odds_ratio_per_year = round(exp(coef(age_model)["visit_age"]), 3),
+  age_p_value = signif(
+    coef(summary(age_model))["visit_age", "Pr(>|z|)"], 3
+  )
+)
+```
+
+In studies 17, 18, and 21, the median age was 21.98 years among low responders and 22.72 years among high responders. After accounting for study, age showed little association with high response (odds ratio per year = 1.008, p = 0.665; n = 267).
+
+```{r}
+# check usable vaccination history values
+history_data <- fluprint |>
+  filter(donor_id %in% response_data$donor_id) |>
+  distinct(donor_id, flu_vaccination_history,
+           total_vaccines_received, vaccinated_1yr_prior)
+
+history_data |>
+  count(flu_vaccination_history) |>
+  print(n = Inf)
+```
+
+```{r}
+# examine participants with known vaccination history
+response_data |>
+  left_join(
+    history_data |>
+      select(donor_id, flu_vaccination_history),
+    by = "donor_id"
+  ) |>
+  filter(flu_vaccination_history %in% c("0", "1")) |>
+  group_by(study_id, flu_vaccination_history) |>
+  summarise(
+    participants = n(),
+    high_responders = sum(vaccine_response == "1"),
+    high_response_percent = round(100 * high_responders/participants, 1),
+    .groups = "drop"
+  ) |>
+print(n = Inf)
+```
+
+```{r}
+history_analysis <- response_data |>
+  dplyr::left_join(
+    history_data |>
+      dplyr::select(donor_id, flu_vaccination_history),
+    by = "donor_id"
+  ) |>
+  dplyr::filter(flu_vaccination_history %in% c("0", "1"))
+
+history_analysis |>
+  group_by(flu_vaccination_history) |>
+  summarise(
+    participants = n(),
+    high_responders = sum(vaccine_response == "1"),
+    high_response_percent = round(100 * high_responders / participants, 1),
+    .groups = "drop"
+  )
+```
+
+Vaccination history was recorded as 0 or 1 for 141 of the 363 participants with a recorded vaccine response. Response group 1 included 8 of 26 participants (30.8%) with history 0 and 21 of 115 (18.3%) with history 1; however, it is also important to note that vaccination history was unavailable for most participants, and the mix of participants differed across studies.
+
+```{r}
+# compare response rates across studies
+study_response <- response_data |>
+  group_by(study_id) |>
+  summarise(
+    participants = n(),
+    high_responders = sum(vaccine_response == "1"),
+    high_response_percent = round(100 * high_responders / participants, 1),
+    .groups = "drop"
+  )
+
+study_response |>
+  arrange(study_id) |>
+  print(n = Inf)
+
+ggplot(study_response,
+       aes(x = factor(study_id), y = high_response_percent)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = paste0("n=", participants)), vjust = -0.4, size = 3) +
+  labs(
+    title = "High response rates across FluPRINT studies",
+    x = "Study ID",
+    y = "High responders (%)"
+  ) +
+  theme_bw()
+```
+
+High-response rates varied across the contributing studies. Study 21 had the highest observed rate (37 of 70 participants, 52.9%), while study 29 had one high responder among 20 participants (5.0%). No high responders were recorded in studies 24 or 30, although both included relatively few participants. These differences support accounting for study when examining age and baseline markers. They also make the pooled vaccination-history percentages difficult to interpret without considering which studies contributed participants.
+
+```{r}
+# check coverage of baseline L50 markers in the model studies
+marker_coverage <- fluprint |>
+  filter(
+    visit_day == 0,
+    study_id %in% c(17, 18, 21),
+    donor_id %in% response_data$donor_id,
+    grepl("^L50_", name_formatted)
+  ) |>
+  group_by(name_formatted) |>
+  summarise(
+    participants = n_distinct(donor_id),
+    low_responders = n_distinct(donor_id[vaccine_response == "0"]),
+    high_responders = n_distinct(donor_id[vaccine_response == "1"]),
+    .groups = "drop"
+  ) |>
+  arrange(desc(participants))
+
+marker_coverage |>
+  print(n = Inf)
+```
+
+```{r}
+# verify measurement rows and usable values across the L50 panel
+l50_check <- fluprint |>
+  filter(
+    visit_day == 0,
+    study_id %in% c(17, 18, 21),
+    donor_id %in% response_data$donor_id,
+    grepl("^L50_", name_formatted)
+  ) |>
+  group_by(name_formatted) |>
+  summarise(
+    rows = n(),
+    participants = n_distinct(donor_id),
+    missing_values = sum(is.na(data)),
+    units = paste(unique(units), collapse = ", "),
+    .groups = "drop"
+  )
+
+l50_check |>
+  count(rows, participants, missing_values, units) |>
+  print(n = Inf)
+
+# identify the marker with repeated measurements
+l50_check |>
+  filter(rows != participants) |>
+  print(n = Inf)
+
+fluprint |>
+  filter(
+    visit_day == 0,
+    study_id %in% c(17, 18, 21),
+    donor_id %in% response_data$donor_id,
+    name_formatted %in% l50_check$name_formatted[
+      l50_check$rows != l50_check$participants
+    ]
+  ) |>
+  count(name_formatted, donor_id) |>
+  count(name_formatted, n, name = "participants") |>
+  print(n = Inf)
+
+# retain markers measured once per participant
+panel_markers <- l50_check |>
+  filter(
+    rows == 233,
+    participants == 233,
+    missing_values == 0
+  ) |>
+  pull(name_formatted)
+
+length(panel_markers)
+```
+
+```{r}
+# assemble the 50-marker analysis dataset
+panel_data <- fluprint |>
+  filter(
+    visit_day == 0,
+    study_id %in% c(17, 18, 21),
+    name_formatted %in% panel_markers
+  ) |>
+  select(donor_id, name_formatted, data) |>
+  left_join(
+    response_data |>
+      select(donor_id, study_id, visit_age, vaccine_response),
+    by = "donor_id"
+  ) |>
+  mutate(response_binary = as.integer(vaccine_response))
+
+# fit one age- and study-adjusted model per marker
+panel_models <- split(panel_data, panel_data$name_formatted) |>
+  lapply(function(marker_rows) {
+    glm(
+      response_binary ~ data + visit_age + factor(study_id),
+      data = marker_rows,
+      family = binomial()
+    )
+  })
+
+# collect marker results and adjust for testing 50 markers
+panel_results <- data.frame(
+  marker = names(panel_models),
+  participants = sapply(panel_models, nobs),
+  odds_ratio = sapply(panel_models, function(model) {
+    exp(coef(model)["data"])
+  }),
+  p_value = sapply(panel_models, function(model) {
+    coef(summary(model))["data", "Pr(>|z|)"]
+  }),
+  row.names = NULL
+) |>
+  mutate(
+    adjusted_p = p.adjust(p_value, method = "BH"),
+    odds_ratio = round(odds_ratio, 2),
+    p_value = signif(p_value, 3),
+    adjusted_p = signif(adjusted_p, 3)
+  ) |>
+  arrange(adjusted_p, p_value)
+
+panel_results |>
+  head(10)
+
+panel_results |>
+  summarise(
+    markers_tested = n(),
+    unadjusted_below_0.05 = sum(p_value < 0.05),
+    adjusted_below_0.05 = sum(adjusted_p < 0.05)
+  )
+```
+
+The broader analysis tested 50 baseline L50 markers in the same 233 participants, using a separate age- and study-adjusted logistic model for each marker. HGF and leptin had unadjusted p-values below 0.05, with estimated odds ratios of 1.52 and 1.32, respectively. After Benjamini-Hochberg correction for the 50 comparisons, no marker met the 0.05 threshold. The panel therefore did not identify a baseline marker with a clear association with high response after accounting for multiple testing.
